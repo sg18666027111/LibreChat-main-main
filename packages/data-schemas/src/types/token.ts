@@ -1,0 +1,46 @@
+import { Document, Types } from 'mongoose';
+
+export interface IToken extends Document {
+  userId: Types.ObjectId;
+  email?: string;
+  type?: string;
+  identifier?: string;
+  token: string;
+  createdAt: Date;
+  expiresAt: Date;
+  metadata?: Map<string, unknown>;
+  tenantId?: string;
+}
+
+export interface TokenCreateData {
+  userId: Types.ObjectId | string;
+  email?: string;
+  type?: string;
+  identifier?: string;
+  token: string;
+  expiresIn: number;
+  metadata?: Map<string, unknown>;
+}
+
+export interface TokenQuery {
+  _id?: Types.ObjectId | string;
+  userId?: Types.ObjectId | string;
+  token?: string;
+  email?: string;
+  type?: string;
+  identifier?: string;
+}
+
+export interface TokenUpdateData {
+  email?: string;
+  type?: string;
+  identifier?: string;
+  token?: string;
+  expiresAt?: Date;
+  expiresIn?: number;
+  metadata?: Map<string, unknown>;
+}
+
+export interface TokenDeleteResult {
+  deletedCount?: number;
+}

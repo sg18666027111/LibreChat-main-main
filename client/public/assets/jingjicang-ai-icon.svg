@@ -1,0 +1,10 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="经济舱 AI">
+  <rect x="13" y="15" width="70" height="66" rx="18" fill="#F8FAFC"/>
+  <rect x="13" y="15" width="70" height="66" rx="18" stroke="#111827" stroke-width="5"/>
+  <path d="M30 35C30 30.5817 33.5817 27 38 27H58C62.4183 27 66 30.5817 66 35V61C66 65.4183 62.4183 69 58 69H38C33.5817 69 30 65.4183 30 61V35Z" fill="#2563EB"/>
+  <path d="M40 42H56M40 56H56" stroke="white" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="48" cy="48" r="7" fill="#0F172A" stroke="white" stroke-width="4"/>
+  <circle cx="31" cy="48" r="4" fill="#2563EB"/>
+  <circle cx="69" cy="48" r="4" fill="#2563EB"/>
+  <path d="M35 48H41M55 48H65" stroke="#2563EB" stroke-width="4" stroke-linecap="round"/>
+</svg>

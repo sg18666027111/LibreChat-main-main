@@ -1,0 +1,491 @@
+import { v4 } from 'uuid';
+import { cloneDeep } from 'lodash';
+import { useNavigate } from 'react-router-dom';
+import { useToastContext } from '@librechat/client';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSetRecoilState, useRecoilValue, useRecoilCallback } from 'recoil';
+import {
+  Constants,
+  QueryKeys,
+  ContentTypes,
+  EModelEndpoint,
+  imageExtRegex,
+  getEndpointField,
+  isAgentsEndpoint,
+  imageMimeTypes,
+  parseCompactConvo,
+  validateVisionModel,
+  replaceSpecialVars,
+  isAssistantsEndpoint,
+  getDefaultParamsEndpoint,
+} from 'librechat-data-provider';
+import type {
+  TMessage,
+  TSubmission,
+  TConversation,
+  TStartupConfig,
+  TEndpointOption,
+  TEndpointsConfig,
+  EndpointSchemaKey,
+  TFile,
+} from 'librechat-data-provider';
+import type { SetterOrUpdater } from 'recoil';
+import type { TAskFunction, ExtendedFile } from '~/common';
+import useSetFilesToDelete from '~/hooks/Files/useSetFilesToDelete';
+import useGetSender from '~/hooks/Conversations/useGetSender';
+import { logger, createDualMessageContent } from '~/utils';
+import store, { useGetEphemeralAgent } from '~/store';
+import { startupConfigKey } from '~/data-provider';
+import useUserKey from '~/hooks/Input/useUserKey';
+import { useAuthContext, useLocalize } from '~/hooks';
+
+const logChatRequest = (request: Record<string, unknown>) => {
+  logger.log('=====================================\nAsk function called with:');
+  logger.dir(request);
+  logger.log('=====================================');
+};
+
+const hasImageAttachment = (fileList?: Array<ExtendedFile | Partial<TFile>>) => {
+  if (!fileList || fileList.length === 0) {
+    return false;
+  }
+
+  return fileList.some((file) => {
+    const type = file.type ?? '';
+    const sourceFile = 'file' in file ? file.file : undefined;
+    const filename = file.filename ?? file.filepath ?? sourceFile?.name ?? '';
+    return imageMimeTypes.test(type) || imageExtRegex.test(filename);
+  });
+};
+
+export default function useChatFunctions({
+  index = 0,
+  files,
+  setFiles,
+  getMessages,
+  setMessages,
+  isSubmitting,
+  latestMessage,
+  setSubmission,
+  conversation: immutableConversation,
+}: {
+  index?: number;
+  isSubmitting: boolean;
+  paramId?: string | undefined;
+  conversation: TConversation | null;
+  latestMessage: TMessage | null;
+  getMessages: () => TMessage[] | undefined;
+  setMessages: (messages: TMessage[]) => void;
+  files?: Map<string, ExtendedFile>;
+  setFiles?: SetterOrUpdater<Map<string, ExtendedFile>>;
+  setSubmission: SetterOrUpdater<TSubmission | null>;
+}) {
+  const navigate = useNavigate();
+  const getSender = useGetSender();
+  const { user } = useAuthContext();
+  const localize = useLocalize();
+  const { showToast } = useToastContext();
+  const queryClient = useQueryClient();
+  const setFilesToDelete = useSetFilesToDelete();
+  const getEphemeralAgent = useGetEphemeralAgent();
+  const isTemporary = useRecoilValue(store.isTemporary);
+  const { getExpiry } = useUserKey(immutableConversation?.endpoint ?? '');
+  const setIsSubmitting = useSetRecoilState(store.isSubmittingFamily(index));
+  const setShowStopButton = useSetRecoilState(store.showStopButtonByIndex(index));
+
+  /**
+   * Atomically read + reset the per-conversation queue of manually-invoked
+   * skills from the `$` popover. Reading and resetting in a single Recoil
+   * snapshot guarantees that if the user selects more skills between here and
+   * the next submission, their picks are never silently lost into a reset atom.
+   *
+   * The `hasValue` guard is defensive: this atom has a synchronous default of
+   * `[]` so `.contents` is always the resolved value in practice, but reading
+   * `.contents` on a loading/errored loadable yields a Promise/Error, which
+   * would make the `string[]` cast unsound.
+   */
+  const drainPendingManualSkills = useRecoilCallback(
+    ({ snapshot, reset }) =>
+      (convoId: string): string[] => {
+        const loadable = snapshot.getLoadable(store.pendingManualSkillsByConvoId(convoId));
+        const skills = loadable.state === 'hasValue' ? (loadable.contents as string[]) : [];
+        if (skills.length > 0) {
+          reset(store.pendingManualSkillsByConvoId(convoId));
+        }
+        return skills;
+      },
+    [],
+  );
+
+  /**
+   * 经济舱：读取当前会话级“持久引用 Skill”的 name（不清空）。每次发送时把引用的
+   * Skill 注入 manualSkills，交由现有 injectSkillPrimes 合并 SKILL.md + references。
+   * 没有引用 Skill 时返回 null，对普通对话零影响。
+   */
+  const getReferencedSkillName = useRecoilCallback(
+    ({ snapshot }) =>
+      (convoId: string): string | null => {
+        const loadable = snapshot.getLoadable(store.referencedSkill);
+        const skill = loadable.state === 'hasValue' ? loadable.contents : null;
+        if (!skill?.name) {
+          return null;
+        }
+        // 仅当引用 Skill 绑定的会话与当前会话一致时才注入，避免切到历史会话被误注入。
+        return skill.boundConvoId === convoId ? skill.name : null;
+      },
+    [],
+  );
+
+  const ask: TAskFunction = (
+    {
+      text,
+      overrideConvoId,
+      overrideUserMessageId,
+      parentMessageId = null,
+      conversationId = null,
+      messageId = null,
+    },
+    {
+      editedContent = null,
+      editedMessageId = null,
+      isRegenerate = false,
+      isContinued = false,
+      isEdited = false,
+      overrideMessages,
+      overrideFiles,
+      overrideManualSkills,
+      addedConvo,
+    } = {},
+  ) => {
+    setShowStopButton(false);
+
+    text = text.trim();
+    if (!!isSubmitting || text === '') {
+      return;
+    }
+
+    const conversation = cloneDeep(immutableConversation);
+
+    const endpoint = conversation?.endpoint;
+    if (endpoint === null) {
+      console.error('No endpoint available');
+      return;
+    }
+
+    conversationId = conversationId ?? conversation?.conversationId ?? null;
+    if (conversationId == 'search') {
+      console.error('cannot send any message under search view!');
+      return;
+    }
+
+    if (isContinued && !latestMessage) {
+      console.error('cannot continue AI message without latestMessage!');
+      return;
+    }
+
+    let ephemeralAgent = getEphemeralAgent(conversationId ?? Constants.NEW_CONVO);
+    const manualSkillConvoId = conversationId ?? Constants.NEW_CONVO;
+    const isEditOrContinue = isEdited || isContinued;
+
+    let currentMessages: TMessage[] | null = overrideMessages ?? getMessages() ?? [];
+
+    if (conversation?.promptPrefix) {
+      conversation.promptPrefix = replaceSpecialVars({
+        text: conversation.promptPrefix,
+        user,
+      });
+    }
+
+    // construct the query message
+    // this is not a real messageId, it is used as placeholder before real messageId returned
+    const intermediateId = overrideUserMessageId ?? v4();
+    parentMessageId = parentMessageId ?? latestMessage?.messageId ?? Constants.NO_PARENT;
+
+    logChatRequest({
+      index,
+      conversation,
+      latestMessage,
+      conversationId,
+      intermediateId,
+      parentMessageId,
+      currentMessages,
+    });
+
+    if (conversationId == Constants.NEW_CONVO) {
+      parentMessageId = Constants.NO_PARENT;
+      currentMessages = [];
+      conversationId = null;
+      navigate('/c/new', { state: { focusChat: true } });
+    }
+
+    const targetParentMessageId = isRegenerate ? messageId : latestMessage?.parentMessageId;
+    /**
+     * If the user regenerated or resubmitted the message, the current parent is technically
+     * the latest user message, which is passed into `ask`; otherwise, we can rely on the
+     * latestMessage to find the parent.
+     */
+    const targetParentMessage = currentMessages.find(
+      (msg) => msg.messageId === targetParentMessageId,
+    );
+
+    let thread_id = targetParentMessage?.thread_id ?? latestMessage?.thread_id;
+    if (thread_id == null) {
+      thread_id = currentMessages.find((message) => message.thread_id)?.thread_id;
+    }
+
+    const endpointsConfig = queryClient.getQueryData<TEndpointsConfig>([QueryKeys.endpoints]);
+    const startupConfig = queryClient.getQueryData<TStartupConfig>(startupConfigKey(true));
+    const endpointType = getEndpointField(endpointsConfig, endpoint, 'type');
+    const iconURL = conversation?.iconURL;
+    const defaultParamsEndpoint = getDefaultParamsEndpoint(endpointsConfig, endpoint);
+
+    /** This becomes part of the `endpointOption` */
+    const convo = parseCompactConvo({
+      endpoint: endpoint as EndpointSchemaKey,
+      endpointType: endpointType as EndpointSchemaKey,
+      conversation: conversation ?? {},
+      defaultParamsEndpoint,
+    });
+
+    const { modelDisplayLabel } = endpointsConfig?.[endpoint ?? ''] ?? {};
+    const endpointOption = Object.assign(
+      {
+        endpoint,
+        endpointType,
+        overrideConvoId,
+        overrideUserMessageId,
+      },
+      convo,
+    ) as TEndpointOption;
+    if (endpoint !== EModelEndpoint.agents) {
+      endpointOption.key = getExpiry();
+      endpointOption.thread_id = thread_id;
+      endpointOption.modelDisplayLabel = modelDisplayLabel;
+    } else {
+      endpointOption.key = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    }
+    const responseSender = getSender({ model: conversation?.model, ...endpointOption });
+
+    const currentMsg: TMessage = {
+      text,
+      sender: 'User',
+      clientTimestamp: new Date().toLocaleString('sv').replace(' ', 'T'),
+      isCreatedByUser: true,
+      parentMessageId,
+      conversationId,
+      messageId: isContinued && messageId != null && messageId ? messageId : intermediateId,
+      thread_id,
+      error: false,
+    };
+
+    const submissionFiles = overrideFiles ?? targetParentMessage?.files;
+    const reuseFiles =
+      (isRegenerate || (overrideFiles != null && overrideFiles.length)) &&
+      submissionFiles &&
+      submissionFiles.length > 0;
+    const pendingFiles = reuseFiles === true ? submissionFiles : Array.from(files?.values() ?? []);
+
+    if (
+      hasImageAttachment(pendingFiles) &&
+      !validateVisionModel({ model: conversation?.model ?? '' })
+    ) {
+      showToast({
+        message: localize('com_ui_model_no_image_vision'),
+        status: 'error',
+        duration: 5000,
+      });
+      return;
+    }
+
+    // Consume draft Skills only after synchronous submission validation succeeds.
+    /**
+     * Manual skill selection resolution:
+     *  - Explicit `overrideManualSkills` wins (regenerate / save-and-submit
+     *    pass the original user message's persisted `manualSkills` so the
+     *    resubmitted turn primes the same skills — the pills are still
+     *    visible to the user, it would be strange to quietly drop them).
+     *  - Regenerate / continue / edit without an override → empty, and the
+     *    compose-time atom is deliberately NOT drained (those flows replay
+     *    a prior turn, not compose a new one).
+     *  - Fresh submit → drain the per-convo atom into the message.
+     */
+    let manualSkills = overrideManualSkills;
+    if (manualSkills == null) {
+      manualSkills =
+        isRegenerate || isContinued || isEdited ? [] : drainPendingManualSkills(manualSkillConvoId);
+    }
+    /**
+     * 经济舱：会话级“持久引用 Skill”。第一版规定一个对话只允许一个 Skill：
+     * 若存在持久 Skill（且绑定当前会话），本轮只注入它，忽略本轮 $ 临时 Skill，
+     * 避免持久 Skill 与 $ 临时 Skill 同时注入造成双 Skill。空引用时保持普通对话。
+     */
+    const referencedSkillName = getReferencedSkillName(manualSkillConvoId);
+    if (referencedSkillName) {
+      manualSkills = [referencedSkillName];
+      // 引用 Skill 时强制打开本轮 ephemeralAgent 的 skills 门控，否则后端 injectSkillPrimes 会跳过注入。
+      ephemeralAgent = { ...(ephemeralAgent ?? {}), skills: true };
+    }
+    currentMsg.manualSkills = manualSkills.length > 0 ? manualSkills : undefined;
+
+    if (setFiles && reuseFiles === true) {
+      currentMsg.files = [...submissionFiles];
+      setFiles(new Map());
+      setFilesToDelete({});
+    } else if (setFiles && files && files.size > 0) {
+      currentMsg.files = Array.from(files.values()).map((file) => ({
+        file_id: file.file_id,
+        filepath: file.filepath,
+        type: file.type ?? '', // Ensure type is not undefined
+        height: file.height,
+        width: file.width,
+      }));
+      setFiles(new Map());
+      setFilesToDelete({});
+    }
+
+    const responseMessageId =
+      editedMessageId ??
+      (latestMessage?.messageId && isRegenerate
+        ? latestMessage.messageId.replace(/_+$/, '') + '_'
+        : null) ??
+      null;
+    const initialResponseId =
+      responseMessageId ?? `${isRegenerate ? messageId : intermediateId}`.replace(/_+$/, '') + '_';
+
+    const initialResponse: TMessage = {
+      sender: responseSender,
+      text: '',
+      endpoint: endpoint ?? '',
+      parentMessageId: isRegenerate ? messageId : intermediateId,
+      messageId: initialResponseId,
+      thread_id,
+      conversationId,
+      unfinished: false,
+      isCreatedByUser: false,
+      model: convo?.model,
+      error: false,
+      iconURL,
+      /**
+       * Seed the assistant placeholder with the turn's manually-invoked
+       * skill names so `ContentParts` can render interim `SkillCall` cards
+       * from the very first render — no round-trip through the `created`
+       * SSE event required. Rides along with every subsequent spread
+       * (`useStepHandler` response construction, `updateContent` result
+       * spreads) and drops out naturally at `finalHandler` when the
+       * server-backed `responseMessage` replacement takes over.
+       */
+      manualSkills: manualSkills.length > 0 ? manualSkills : undefined,
+    };
+
+    if (isAssistantsEndpoint(endpoint)) {
+      initialResponse.model = conversation?.assistant_id ?? '';
+      initialResponse.text = '';
+      initialResponse.content = [
+        {
+          type: ContentTypes.TEXT,
+          [ContentTypes.TEXT]: {
+            value: '',
+          },
+        },
+      ];
+    } else if (endpoint != null) {
+      initialResponse.model = isAgentsEndpoint(endpoint)
+        ? (conversation?.agent_id ?? '')
+        : (conversation?.model ?? '');
+      initialResponse.text = '';
+
+      if (editedContent && latestMessage?.content) {
+        initialResponse.content = cloneDeep(latestMessage.content);
+        const { index, type, ...part } = editedContent;
+        if (initialResponse.content && index >= 0 && index < initialResponse.content.length) {
+          const contentPart = initialResponse.content[index];
+          if (type === ContentTypes.THINK && contentPart.type === ContentTypes.THINK) {
+            contentPart[ContentTypes.THINK] = part[ContentTypes.THINK];
+          } else if (type === ContentTypes.TEXT && contentPart.type === ContentTypes.TEXT) {
+            contentPart[ContentTypes.TEXT] = part[ContentTypes.TEXT];
+          }
+        }
+      } else if (addedConvo && conversation) {
+        // Pre-populate placeholders for smooth UI - these will be overridden/extended
+        // as SSE events arrive with actual content, preserving the agent-based agentId
+        initialResponse.content = createDualMessageContent(
+          conversation,
+          addedConvo,
+          endpointsConfig,
+          startupConfig?.modelSpecs?.list,
+        );
+      } else {
+        initialResponse.content = [];
+      }
+      setIsSubmitting(true);
+      setShowStopButton(true);
+    }
+
+    if (isContinued) {
+      currentMessages = currentMessages.filter((msg) => msg.messageId !== responseMessageId);
+    }
+
+    logger.log('message_state', initialResponse);
+    const submission: TSubmission = {
+      conversation: {
+        ...conversation,
+        conversationId,
+      },
+      endpointOption,
+      userMessage: {
+        ...currentMsg,
+        responseMessageId,
+        overrideParentMessageId: isRegenerate ? messageId : null,
+      },
+      messages: currentMessages,
+      isEdited: isEditOrContinue,
+      isContinued,
+      isRegenerate,
+      initialResponse,
+      isTemporary,
+      ephemeralAgent,
+      editedContent,
+      addedConvo,
+      manualSkills: manualSkills.length > 0 ? manualSkills : undefined,
+    };
+
+    if (isRegenerate) {
+      setMessages([...submission.messages, initialResponse]);
+    } else {
+      setMessages([...submission.messages, currentMsg, initialResponse]);
+    }
+
+    setSubmission(submission);
+    logger.dir('message_stream', submission, { depth: null });
+  };
+
+  const regenerate = ({ parentMessageId }, options?: { addedConvo?: TConversation | null }) => {
+    const messages = getMessages();
+    const parentMessage = messages?.find((element) => element.messageId == parentMessageId);
+
+    if (parentMessage && parentMessage.isCreatedByUser) {
+      ask(
+        { ...parentMessage },
+        {
+          isRegenerate: true,
+          addedConvo: options?.addedConvo ?? undefined,
+          /** Carry the original user message's manual skill picks forward
+           *  so the regenerated response is primed with the same skills.
+           *  The compose-time atom was drained on the first submit; without
+           *  this the model sees an unprimed turn even though the pills
+           *  still show on the user bubble. */
+          overrideManualSkills: parentMessage.manualSkills,
+        },
+      );
+    } else {
+      console.error(
+        'Failed to regenerate the message: parentMessage not found or not created by user.',
+      );
+    }
+  };
+
+  return {
+    ask,
+    regenerate,
+  };
+}

@@ -1,0 +1,27 @@
+name: Docker Build Failure Gate
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.github/tests/docker-build-gate.test.cjs'
+      - '.github/workflows/docker-build-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-failure-propagation:
+    name: Verify Docker build failure propagation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.16.0'
+      - name: Test the Dockerfile build layer without installing app dependencies
+        run: node --test .github/tests/docker-build-gate.test.cjs

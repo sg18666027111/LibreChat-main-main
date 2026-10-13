@@ -1,0 +1,97 @@
+groups:
+  - name: librechat-image-reliability
+    rules:
+      - alert: LibreChatMetricsUnavailable
+        expr: up{job="librechat"} == 0 or absent(up{job="librechat"})
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: LibreChat metrics cannot be collected
+      - alert: LibreChatImageQueueSnapshotStale
+        expr: (time() - image_queue_snapshot_last_success_timestamp_seconds{job="librechat"} > 180) or (up{job="librechat"} == 1 unless on(job, instance) image_queue_snapshot_last_success_timestamp_seconds{job="librechat"})
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Image queue observation is missing or stale
+      - alert: LibreChatImageWorkerHeartbeatStale
+        expr: (image_worker_running{job="librechat"} == 1) and (time() - image_worker_last_tick_timestamp_seconds{job="librechat"} > 180)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Image worker has not completed a tick recently
+      - alert: LibreChatImageWorkerErrors
+        expr: increase(image_worker_ticks_total{job="librechat",result="error"}[5m]) >= 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Image worker ticks repeatedly fail
+      - alert: LibreChatImageQueueWaiting
+        expr: ((time() - image_queue_oldest_entered_timestamp_seconds{job="librechat",worker!="legacy",status="waiting",eligibility="eligible"} > 600) and (image_queue_jobs{job="librechat",worker!="legacy",status="waiting",eligibility="eligible"} > 0)) and on(job, instance) (time() - image_queue_snapshot_last_success_timestamp_seconds{job="librechat"} < 180)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Eligible image tasks have been waiting over ten minutes
+      - alert: LibreChatImageQueueActiveTooOld
+        expr: ((time() - image_queue_oldest_entered_timestamp_seconds{job="librechat",worker!="legacy",status=~"submitting|submitted|polling",eligibility="eligible"} > 1800) and (image_queue_jobs{job="librechat",worker!="legacy",status=~"submitting|submitted|polling",eligibility="eligible"} > 0)) and on(job, instance) (time() - image_queue_snapshot_last_success_timestamp_seconds{job="librechat"} < 180)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Active image tasks are over thirty minutes old
+      - alert: LibreChatImageUnknownOutcome
+        expr: (image_queue_jobs{job="librechat",worker!="legacy",status="status_unknown"} > 0) and on(job, instance) (time() - image_queue_snapshot_last_success_timestamp_seconds{job="librechat"} < 180)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Image task outcome needs manual review; do not resubmit
+      - alert: LibreChatImageExpiredLease
+        expr: (image_queue_expired_leases{job="librechat",worker!="legacy",eligibility="eligible"} > 0) and on(job, instance) (time() - image_queue_snapshot_last_success_timestamp_seconds{job="librechat"} < 180)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Image tasks retain expired worker leases
+
+  - name: librechat-usage-delivery
+    rules:
+      - alert: LibreChatUsageDeliveryUnavailable
+        expr: librechat_usage_delivery_writable{job="librechat"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 用量持久日志不可写，新的付费调用已暂停
+      - alert: LibreChatUsageDeliveryDelayed
+        expr: librechat_usage_delivery_oldest_seconds{job="librechat"} > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 用量补记积压超过五分钟
+      - alert: LibreChatUsageDeliveryCapacity
+        expr: librechat_usage_delivery_pending_bytes{job="librechat"} > 201326592
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 用量持久日志已超过待处理容量的四分之三
+      - alert: LibreChatUsageDeliveryReview
+        expr: librechat_usage_delivery_quarantined{job="librechat"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 有用量记录需要人工核对
+      - alert: LibreChatUsageDeliveryFailures
+        expr: sum by (job, instance) (increase(librechat_usage_delivery_failures_total{job="librechat"}[5m])) >= 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 用量捕获或源对账持续失败，请检查日志与数据证据

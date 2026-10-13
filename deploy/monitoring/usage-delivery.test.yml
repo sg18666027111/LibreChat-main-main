@@ -1,0 +1,205 @@
+{
+  "rule_files": [
+    "image-reliability.rules.yml"
+  ],
+  "evaluation_interval": "1m",
+  "tests": [
+    {
+      "name": "LibreChatUsageDeliveryUnavailable",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "librechat_usage_delivery_writable{job=\"librechat\",instance=\"fixture\"}",
+          "values": "0x4 1x8"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "2m",
+          "alertname": "LibreChatUsageDeliveryUnavailable",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "librechat",
+                "instance": "fixture",
+                "severity": "critical"
+              },
+              "exp_annotations": {
+                "summary": "用量持久日志不可写，新的付费调用已暂停"
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "10m",
+          "alertname": "LibreChatUsageDeliveryUnavailable",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "LibreChatUsageDeliveryDelayed",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "librechat_usage_delivery_oldest_seconds{job=\"librechat\",instance=\"fixture\"}",
+          "values": "600x7 0x5"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "6m",
+          "alertname": "LibreChatUsageDeliveryDelayed",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "librechat",
+                "instance": "fixture",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "用量补记积压超过五分钟"
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "10m",
+          "alertname": "LibreChatUsageDeliveryDelayed",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "LibreChatUsageDeliveryCapacity",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "librechat_usage_delivery_pending_bytes{job=\"librechat\",instance=\"fixture\"}",
+          "values": "210000000x7 0x5"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "6m",
+          "alertname": "LibreChatUsageDeliveryCapacity",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "librechat",
+                "instance": "fixture",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "用量持久日志已超过待处理容量的四分之三"
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "10m",
+          "alertname": "LibreChatUsageDeliveryCapacity",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "LibreChatUsageDeliveryReview",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "librechat_usage_delivery_quarantined{job=\"librechat\",instance=\"fixture\"}",
+          "values": "1x7 0x5"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "6m",
+          "alertname": "LibreChatUsageDeliveryReview",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "librechat",
+                "instance": "fixture",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "有用量记录需要人工核对"
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "10m",
+          "alertname": "LibreChatUsageDeliveryReview",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "disabled mode has no usage alerts",
+      "interval": "1m",
+      "input_series": [],
+      "alert_rule_test": [
+        {
+          "eval_time": "10m",
+          "alertname": "LibreChatUsageDeliveryUnavailable",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "10m",
+          "alertname": "LibreChatUsageDeliveryDelayed",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "10m",
+          "alertname": "LibreChatUsageDeliveryCapacity",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "10m",
+          "alertname": "LibreChatUsageDeliveryReview",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "10m",
+          "alertname": "LibreChatUsageDeliveryFailures",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "repeated failures alert and recover",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "librechat_usage_delivery_failures_total{job=\"librechat\",instance=\"fixture\",reason=\"invalid\"}",
+          "values": "0+1x10 10x10"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "10m",
+          "alertname": "LibreChatUsageDeliveryFailures",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "librechat",
+                "instance": "fixture",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "用量捕获或源对账持续失败，请检查日志与数据证据"
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "18m",
+          "alertname": "LibreChatUsageDeliveryFailures",
+          "exp_alerts": []
+        }
+      ]
+    }
+  ]
+}

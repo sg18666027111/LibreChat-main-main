@@ -1,0 +1,57 @@
+<html>
+  <body style='font-family: Arial, Helvetica, sans-serif; color: #1f2937;'>
+    <h2>{{appName}} AI 用量日报</h2>
+    <p>统计周期：{{windowStart}} 至 {{windowEnd}}（Asia/Shanghai 10:00 日报窗口）</p>
+    <table
+      cellpadding='8'
+      cellspacing='0'
+      border='1'
+      style='border-collapse: collapse; border-color: #d1d5db;'
+    >
+      <tr><td>报表</td><td>{{periodKey}}</td></tr>
+      <tr><td>调用事件</td><td>{{eventCount}}</td></tr>
+      <tr><td>活跃用户</td><td>{{userCount}}</td></tr>
+      <tr><td>输入 tokens</td><td>{{inputTokens}}</td></tr>
+      <tr><td>输出 tokens</td><td>{{outputTokens}}</td></tr>
+      <tr><td>图片数</td><td>{{imageCount}}</td></tr>
+      <tr><td>预计成本 CNY</td><td>{{costCny}}</td></tr>
+      <tr><td>文本模型成本 CNY</td><td>{{textCostCny}}</td></tr>
+      <tr><td>生图成本 CNY</td><td>{{imageCostCny}}</td></tr>
+      <tr><td>成功 / 失败 / 未知 / 取消</td><td>{{succeededCount}}
+          /
+          {{failedCount}}
+          /
+          {{statusUnknownCount}}
+          /
+          {{cancelledCount}}</td></tr>
+      <tr><td>缺失定价事件</td><td>{{missingPricingCount}}</td></tr>
+      <tr><td>较前24小时</td><td>{{previousCostDelta}}（{{previousCostPercent}}）</td></tr>
+      <tr><td>过去7个完整窗口平均</td><td>{{sevenWindowAverageCost}}</td></tr>
+      <tr><td>后台入口</td><td>{{usageCenterUrl}}</td></tr>
+    </table>
+    <h3>消耗前10名</h3>
+    <ol>
+      {{#each topUsers}}
+        <li>{{name}}：{{eventCount}} 次，CNY {{costCny}}</li>
+      {{/each}}
+    </ol>
+    <h3>模型排行</h3>
+    <ol>
+      {{#each topModels}}
+        <li>{{model}}（{{businessType}}）：{{eventCount}} 次，CNY {{costCny}}</li>
+      {{/each}}
+    </ol>
+    <h3>业务排行</h3>
+    <ol>
+      {{#each topBusinesses}}
+        <li>{{businessType}}：{{eventCount}} 次，CNY {{costCny}}</li>
+      {{/each}}
+    </ol>
+    <h3>异常消费用户</h3>
+    <ol>
+      {{#each anomalies}}
+        <li>{{name}}：{{type}}，CNY {{currentCostCny}}，{{reason}}</li>
+      {{/each}}
+    </ol>
+  </body>
+</html>

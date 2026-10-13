@@ -1,0 +1,318 @@
+{
+  'rule_files': ['image-reliability.rules.yml'],
+  'evaluation_interval': '1m',
+  'tests':
+    [
+      {
+        'name': 'scrape outage and recovery',
+        'interval': '1m',
+        'input_series':
+          [{ 'series': 'up{job="librechat",instance="app:8080"}', 'values': '0x4 1x10' }],
+        'alert_rule_test':
+          [
+            {
+              'eval_time': '3m',
+              'alertname': 'LibreChatMetricsUnavailable',
+              'exp_alerts':
+                [
+                  {
+                    'exp_labels':
+                      { 'job': 'librechat', 'instance': 'app:8080', 'severity': 'warning' },
+                    'exp_annotations': { 'summary': 'LibreChat metrics cannot be collected' },
+                  },
+                ],
+            },
+            { 'eval_time': '6m', 'alertname': 'LibreChatMetricsUnavailable', 'exp_alerts': [] },
+          ],
+      },
+      {
+        'name': 'missing queue instrumentation despite healthy scrape',
+        'interval': '1m',
+        'input_series': [{ 'series': 'up{job="librechat",instance="app:8080"}', 'values': '1x10' }],
+        'alert_rule_test':
+          [
+            {
+              'eval_time': '3m',
+              'alertname': 'LibreChatImageQueueSnapshotStale',
+              'exp_alerts':
+                [
+                  {
+                    'exp_labels':
+                      { 'job': 'librechat', 'instance': 'app:8080', 'severity': 'warning' },
+                    'exp_annotations': { 'summary': 'Image queue observation is missing or stale' },
+                  },
+                ],
+            },
+          ],
+      },
+      {
+        'name': 'heartbeat stalls and recovers',
+        'interval': '1m',
+        'input_series':
+          [
+            {
+              'series': 'image_worker_running{job="librechat",instance="app:8080",worker="image_egress"}',
+              'values': '1x12',
+            },
+            {
+              'series': 'image_worker_last_tick_timestamp_seconds{job="librechat",instance="app:8080",worker="image_egress"}',
+              'values': '0x7 480+60x4',
+            },
+          ],
+        'alert_rule_test':
+          [
+            {
+              'eval_time': '6m',
+              'alertname': 'LibreChatImageWorkerHeartbeatStale',
+              'exp_alerts':
+                [
+                  {
+                    'exp_labels':
+                      {
+                        'job': 'librechat',
+                        'instance': 'app:8080',
+                        'severity': 'warning',
+                        'worker': 'image_egress',
+                      },
+                    'exp_annotations':
+                      { 'summary': 'Image worker has not completed a tick recently' },
+                  },
+                ],
+            },
+            {
+              'eval_time': '9m',
+              'alertname': 'LibreChatImageWorkerHeartbeatStale',
+              'exp_alerts': [],
+            },
+          ],
+      },
+      {
+        'name': 'repeated worker failures',
+        'interval': '1m',
+        'input_series':
+          [
+            {
+              'series': 'image_worker_ticks_total{job="librechat",instance="app:8080",worker="apimart_img2",result="error"}',
+              'values': '0+1x10',
+            },
+          ],
+        'alert_rule_test':
+          [
+            {
+              'eval_time': '6m',
+              'alertname': 'LibreChatImageWorkerErrors',
+              'exp_alerts':
+                [
+                  {
+                    'exp_labels':
+                      {
+                        'job': 'librechat',
+                        'instance': 'app:8080',
+                        'severity': 'warning',
+                        'worker': 'apimart_img2',
+                        'result': 'error',
+                      },
+                    'exp_annotations': { 'summary': 'Image worker ticks repeatedly fail' },
+                  },
+                ],
+            },
+          ],
+      },
+      {
+        'name': 'waiting age and recovery',
+        'interval': '1m',
+        'input_series':
+          [
+            {
+              'series': 'image_queue_snapshot_last_success_timestamp_seconds{job="librechat",instance="app:8080"}',
+              'values': '0+60x45',
+            },
+            {
+              'series': 'image_queue_oldest_entered_timestamp_seconds{job="librechat",instance="app:8080",worker="image_egress",status="waiting",eligibility="eligible"}',
+              'values': '1x38 0x5',
+            },
+            {
+              'series': 'image_queue_jobs{job="librechat",instance="app:8080",worker="image_egress",status="waiting",eligibility="eligible"}',
+              'values': '2x38 0x5',
+            },
+          ],
+        'alert_rule_test':
+          [
+            {
+              'eval_time': '16m',
+              'alertname': 'LibreChatImageQueueWaiting',
+              'exp_alerts':
+                [
+                  {
+                    'exp_labels':
+                      {
+                        'job': 'librechat',
+                        'instance': 'app:8080',
+                        'severity': 'warning',
+                        'worker': 'image_egress',
+                        'status': 'waiting',
+                        'eligibility': 'eligible',
+                      },
+                    'exp_annotations':
+                      { 'summary': 'Eligible image tasks have been waiting over ten minutes' },
+                  },
+                ],
+            },
+            { 'eval_time': '40m', 'alertname': 'LibreChatImageQueueWaiting', 'exp_alerts': [] },
+          ],
+      },
+      {
+        'name': 'polling age and recovery',
+        'interval': '1m',
+        'input_series':
+          [
+            {
+              'series': 'image_queue_snapshot_last_success_timestamp_seconds{job="librechat",instance="app:8080"}',
+              'values': '0+60x45',
+            },
+            {
+              'series': 'image_queue_oldest_entered_timestamp_seconds{job="librechat",instance="app:8080",worker="image_egress",status="polling",eligibility="eligible"}',
+              'values': '1x38 0x5',
+            },
+            {
+              'series': 'image_queue_jobs{job="librechat",instance="app:8080",worker="image_egress",status="polling",eligibility="eligible"}',
+              'values': '2x38 0x5',
+            },
+          ],
+        'alert_rule_test':
+          [
+            {
+              'eval_time': '36m',
+              'alertname': 'LibreChatImageQueueActiveTooOld',
+              'exp_alerts':
+                [
+                  {
+                    'exp_labels':
+                      {
+                        'job': 'librechat',
+                        'instance': 'app:8080',
+                        'severity': 'warning',
+                        'worker': 'image_egress',
+                        'status': 'polling',
+                        'eligibility': 'eligible',
+                      },
+                    'exp_annotations':
+                      { 'summary': 'Active image tasks are over thirty minutes old' },
+                  },
+                ],
+            },
+            {
+              'eval_time': '40m',
+              'alertname': 'LibreChatImageQueueActiveTooOld',
+              'exp_alerts': [],
+            },
+          ],
+      },
+      {
+        'name': 'status_unknown visible only while snapshot fresh',
+        'interval': '1m',
+        'input_series':
+          [
+            {
+              'series': 'image_queue_snapshot_last_success_timestamp_seconds{job="librechat",instance="app:8080"}',
+              'values': '0+60x8 0x10',
+            },
+            {
+              'series': 'image_queue_jobs{job="librechat",instance="app:8080",worker="apimart_img2",status="status_unknown",eligibility="eligible"}',
+              'values': '1x20',
+            },
+          ],
+        'alert_rule_test':
+          [
+            {
+              'eval_time': '6m',
+              'alertname': 'LibreChatImageUnknownOutcome',
+              'exp_alerts':
+                [
+                  {
+                    'exp_labels':
+                      {
+                        'job': 'librechat',
+                        'instance': 'app:8080',
+                        'severity': 'warning',
+                        'worker': 'apimart_img2',
+                        'status': 'status_unknown',
+                        'eligibility': 'eligible',
+                      },
+                    'exp_annotations':
+                      { 'summary': 'Image task outcome needs manual review; do not resubmit' },
+                  },
+                ],
+            },
+            { 'eval_time': '12m', 'alertname': 'LibreChatImageUnknownOutcome', 'exp_alerts': [] },
+          ],
+      },
+      {
+        'name': 'polling visible only while snapshot fresh',
+        'interval': '1m',
+        'input_series':
+          [
+            {
+              'series': 'image_queue_snapshot_last_success_timestamp_seconds{job="librechat",instance="app:8080"}',
+              'values': '0+60x8 0x10',
+            },
+            {
+              'series': 'image_queue_expired_leases{job="librechat",instance="app:8080",worker="apimart_img2",status="polling",eligibility="eligible"}',
+              'values': '1x20',
+            },
+          ],
+        'alert_rule_test':
+          [
+            {
+              'eval_time': '6m',
+              'alertname': 'LibreChatImageExpiredLease',
+              'exp_alerts':
+                [
+                  {
+                    'exp_labels':
+                      {
+                        'job': 'librechat',
+                        'instance': 'app:8080',
+                        'severity': 'warning',
+                        'worker': 'apimart_img2',
+                        'status': 'polling',
+                        'eligibility': 'eligible',
+                      },
+                    'exp_annotations': { 'summary': 'Image tasks retain expired worker leases' },
+                  },
+                ],
+            },
+            { 'eval_time': '12m', 'alertname': 'LibreChatImageExpiredLease', 'exp_alerts': [] },
+          ],
+      },
+      {
+        'name': 'legacy and staged waiting do not page current workers',
+        'interval': '1m',
+        'input_series':
+          [
+            {
+              'series': 'image_queue_snapshot_last_success_timestamp_seconds{job="librechat",instance="app:8080"}',
+              'values': '0+60x45',
+            },
+            {
+              'series': 'image_queue_jobs{job="librechat",instance="app:8080",worker="legacy",status="waiting",eligibility="eligible"}',
+              'values': '1x30',
+            },
+            {
+              'series': 'image_queue_oldest_entered_timestamp_seconds{job="librechat",instance="app:8080",worker="legacy",status="waiting",eligibility="eligible"}',
+              'values': '1x30',
+            },
+            {
+              'series': 'image_queue_jobs{job="librechat",instance="app:8080",worker="image_egress",status="waiting",eligibility="ineligible"}',
+              'values': '1x30',
+            },
+            {
+              'series': 'image_queue_oldest_entered_timestamp_seconds{job="librechat",instance="app:8080",worker="image_egress",status="waiting",eligibility="ineligible"}',
+              'values': '1x30',
+            },
+          ],
+        'alert_rule_test':
+          [{ 'eval_time': '25m', 'alertname': 'LibreChatImageQueueWaiting', 'exp_alerts': [] }],
+      },
+    ],
+}
